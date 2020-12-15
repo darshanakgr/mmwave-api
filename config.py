@@ -1,3 +1,6 @@
+import numpy as np
+
+
 def init_config(max_num_sub_frames=4):
     config = {
         "channelCfg": {},
@@ -398,11 +401,40 @@ def validate_config(path):
                 print("calibData invalid configuration")
                 return None
 
-    return config
+    return profileCfgCounter, chirpCfgCounter, config
+
+
+def get_profile_idx(config, sub_frame_num, profile_cfg_counter, chirp_cfg_counter):
+    firstChirp = 0
+    if config["dfeDataOutputMode"]["mode"] == 1:
+        firstChirp = config["frameCfg"]["chirpStartIdx"]
+    elif config["dfeDataOutputMode"]["mode"] == 3:
+        firstChirp = config["subFrameCfg"][sub_frame_num]["chirpStartIdx"]
+
+    profileId = -1
+    for i in range(chirp_cfg_counter):
+        if (firstChirp >= config["chirpCfg"][i]["startIdx"]) and (firstChirp <= config["chirpCfg"][i]["endIdx"]):
+            profileId = config["chirpCfg"][i]["profileId"]
+    if profileId == -1:
+        return -1
+    for i in range(profile_cfg_counter):
+        if config["profileCfg"][i]["profileId"] == profileId:
+            return i
+    return -1
+
+
+def get_ant_config(ParamsIn, subFrameNum):
+    if ParamsIn["dfeDataOutputMode"]["mode"] == 1:
+        if (ParamsIn["chirpCfg"][0]["numTxAzimAnt"] == 1):
+            ParamsIn["dataPath"][0]["dataPath"] = 1
+        else:
+            ParamsIn["dataPath"][0]["numTxAzimAnt"] = ParamsIn["channelCfg"]["numTxAzimAnt"]
+        ParamsIn["dataPath"][0]["numTxElevAnt"] = ParamsIn.channelCfg.numTxElevAnt
+        ParamsIn["dataPath"][0]["numTxAzimAnt"] = ParamsIn.channelCfg.numRxAnt
 
 
 def parse_config(path):
-    config = validate_config(path)
+    profile_cfg_counter, chirp_cfg_counter, config = validate_config(path)
     if config is None:
         print("Parsing configuration failed.")
         return None
@@ -412,7 +444,115 @@ def parse_config(path):
     elif config["dfeDataOutputMode"]["mode"] == 3:
         totalSubframes = config["advFrameCfg"]["numOfSubFrames"]
 
+    for idx in range(totalSubframes):
+        profileCfgIdx = get_profile_idx(config, idx, profile_cfg_counter, chirp_cfg_counter)
+        if profileCfgIdx == -1:
+            print("Could not find profile for chirp configuration")
+            return None
 
+        if config["dfeDataOutputMode"]["mode"] == 1:
+            if config["chirpCfg"][0]["numTxAzimAnt"] == 1:
+                config["dataPath"][0]["dataPath"] = 1
+            else:
+                config["dataPath"][0]["numTxAzimAnt"] = config["channelCfg"]["numTxAzimAnt"]
+            config["dataPath"][0]["numTxElevAnt"] = config["channelCfg"]["numTxElevAnt"]
+            config["dataPath"][0]["numRxAnt"] = config["channelCfg"]["numRxAnt"]
+
+            config["dataPath"][idx]["numChirpsPerFrame"] = (config["frameCfg"]["chirpEndIdx"] - \
+                                                            config["frameCfg"]["chirpStartIdx"] + 1) * \
+                                                           config["frameCfg"]["numLoops"]
+
+        elif config["dfeDataOutputMode"]["mode"] == 3:
+            pass
+
+        config["dataPath"][idx]["numTxAnt"] = config["dataPath"][idx]["numTxElevAnt"] + \
+                                              config["dataPath"][idx]["numTxAzimAnt"]
+        config["dataPath"][idx]["numDopplerChirps"] = config["dataPath"][idx]["numChirpsPerFrame"] / \
+                                                      config["dataPath"][idx]["numTxAnt"]
+
+        if config["dataPath"][idx]["numRxAnt"] * config["dataPath"][idx]["numTxAzimAnt"] < 2:
+            config["dataPath"][idx]["azimuthResolution"] = 'None'
+        else:
+            config["dataPath"][idx]["azimuthResolution"] = np.round(np.arcsin(
+                2 / (config["dataPath"][idx]["numRxAnt"] * config["dataPath"][idx]["numTxAzimAnt"])) * 180 / np.pi, 1)
+
+        if config["dataPath"][idx]["numDopplerChirps"] <= 4:
+            config["dataPath"][idx]["numDopplerBins"] = 8
+        else:
+            config["dataPath"][idx]["numDopplerBins"] = 1 << np.ceil(
+                np.log2(config["dataPath"][idx]["numDopplerChirps"])).astype(np.int)
+
+        config["dataPath"][idx]["numRangeBins"] = 1 << np.ceil(
+            np.log2(config["profileCfg"][profileCfgIdx]["numAdcSamples"])).astype(np.int)
+
+        if ((config["dataPath"][idx]["numTxAnt"] * config["dataPath"][idx]["numRxAnt"]) == 12) and (
+                config["dataPath"][idx]["numRangeBins"] == 1024):
+            config["dataPath"][idx]["numRangeBins"] = 1022
+
+        CLI_FREQ_SCALE_FACTOR = 3.6  # 77GHz
+        if config["profileCfg"][profileCfgIdx]["startFreq"] < 76:
+            CLI_FREQ_SCALE_FACTOR = 2.7  # 60GHz
+
+        mmwFreqSlopeConst = np.trunc(
+            config["profileCfg"][profileCfgIdx]["freqSlopeConst"] * (1 << 26) / CLI_FREQ_SCALE_FACTOR)
+        config["profileCfg"][profileCfgIdx]["freqSlopeConst_actual"] = mmwFreqSlopeConst * (
+                CLI_FREQ_SCALE_FACTOR / (1 << 26))
+        startFreqConst = np.trunc(config["profileCfg"][profileCfgIdx]["startFreq"] * (1 << 26) / CLI_FREQ_SCALE_FACTOR)
+        config["profileCfg"][profileCfgIdx]["startFreq_actual"] = (startFreqConst * CLI_FREQ_SCALE_FACTOR / (1 << 26))
+
+        config["profileCfg"][profileCfgIdx]["centerFreq_actual"] = (
+                config["profileCfg"][profileCfgIdx]["startFreq_actual"] + \
+                0.5 * ((config["profileCfg"][profileCfgIdx]["freqSlopeConst_actual"] * \
+                        config["profileCfg"][profileCfgIdx]["numAdcSamples"]) / \
+                       (config["profileCfg"][profileCfgIdx]["digOutSampleRate"])) + \
+                (config["profileCfg"][profileCfgIdx]["freqSlopeConst_actual"] * \
+                 config["profileCfg"][profileCfgIdx]["adcStartTimeConst"] * 10 * 1e-9)
+        )
+
+        config["dataPath"][idx]["rangeResolutionMeters"] = 300 * \
+                                                           config["profileCfg"][profileCfgIdx]["digOutSampleRate"] / \
+                                                           (2 * 1e3 * \
+                                                            config["profileCfg"][profileCfgIdx]["numAdcSamples"] * \
+                                                            config["profileCfg"][profileCfgIdx][
+                                                                "freqSlopeConst_actual"])
+
+        config["dataPath"][idx]["rangeIdxToMeters"] = 3e8 * config["profileCfg"][profileCfgIdx]["digOutSampleRate"] * \
+                                                      1e3 / (2 * np.abs(
+            config["profileCfg"][profileCfgIdx]["freqSlopeConst_actual"]) * 1e12 * config["dataPath"][idx][
+                                                                 "numRangeBins"])
+
+        config["dataPath"][idx]["rangeMeters"] = 300 * 0.8 * config["profileCfg"][profileCfgIdx]["digOutSampleRate"] / (
+                2 * config["profileCfg"][profileCfgIdx]["freqSlopeConst_actual"] * 1e3)
+
+        config["dataPath"][idx]["velocityMps"] = 3e8 / (
+                4 * config["profileCfg"][profileCfgIdx]["centerFreq_actual"] * 1e9 *
+                (config["profileCfg"][profileCfgIdx]["idleTime"] + config["profileCfg"][
+                    profileCfgIdx]["rampEndTime"]) *
+                1e-6 * config["dataPath"][idx]["numTxAnt"])
+
+        config["dataPath"][idx]["dopplerResolutionMps"] = 3e8 / (
+                2 * config["profileCfg"][profileCfgIdx]["centerFreq_actual"] * 1e9 *
+                (config["profileCfg"][profileCfgIdx]["idleTime"] + config["profileCfg"][
+                    profileCfgIdx]["rampEndTime"]) * 1e-6 *
+                config["dataPath"][idx]["numDopplerBins"] * config["dataPath"][idx]["numTxAnt"])
+
+        NumVirtAnt = config["dataPath"][idx]["numTxAnt"] * config["dataPath"][idx]["numRxAnt"]
+
+        config["log2linScale"][idx] = (1 / 256) * (2 ** np.ceil(np.log2(NumVirtAnt)) / NumVirtAnt)
+        config["toDB"] = 20 * np.log10(2)
+        config["rangeAzimuthHeatMapGrid_points"] = 100
+
+        # Range HWA DPU
+        config["dspFftScaleComp1D_lin"].append(32 / config["dataPath"][idx]["numRangeBins"])
+        config["dspFftScaleComp1D_log"].append(20 * np.log10(config["dspFftScaleComp1D_lin"][idx]))
+        # Doppler HWA DPU
+        config["dspFftScaleComp2D_lin"].append(1)
+        config["dspFftScaleComp2D_log"].append(0)
+        config["dspFftScaleCompAll_lin"].append(config["dspFftScaleComp2D_lin"][idx] *\
+                                                config["dspFftScaleComp1D_lin"][idx])
+        config["dspFftScaleCompAll_log"].append(config["dspFftScaleComp2D_log"][idx] +\
+                                                config["dspFftScaleComp1D_log"][idx])
+    return config
 
 
 if __name__ == '__main__':
