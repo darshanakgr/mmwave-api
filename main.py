@@ -2,6 +2,9 @@ import serial
 import utils
 from threading import Thread
 import numpy as np
+import re
+
+from config import parse_config
 
 control_port = "COM8"
 data_port = "COM7"
@@ -27,7 +30,7 @@ def to_int(byte_vector):
 
 
 def to_float(byte_vector):
-    return np.frombuffer(byte_vector, dtype=np.uint8).view('<f4')
+    return np.frombuffer(byte_vector, dtype=np.uint8).view('<f4')[0]
 
 
 # def intify(value, base=16, size=2):
@@ -46,8 +49,8 @@ try:
     if control_serial is not None and data_serial is not None:
         Thread(target=utils.cli_listener, args=(control_serial,)).start()
         # Sending configuration
-        config = utils.load_config("configs/profile_3d.cfg")
-        utils.send_config(control_serial, config)
+        utils.send_config(control_serial, utils.load_config("configs/profile_3d.cfg"))
+        config = parse_config("configs/profile_3d.cfg")
         # Listening to the data port
         buffer = b""
         index = 8
@@ -69,18 +72,18 @@ try:
                     index += 4
                     numTLVs = to_int(buffer[index: index + 4])
                     index += 4
-                    currentSubFrameNumber = to_int(buffer[index: index + 4])
+                    subFrameNo = to_int(buffer[index: index + 4])
                     index += 4
 
                     if totalPacketLen == len(buffer):
-                        print(frameNumber, currentSubFrameNumber, numTLVs, numDetectedObj)
+                        print(frameNumber, subFrameNo, numTLVs, numDetectedObj)
                         detectedPoints_byteVecIdx = -1
-                        for tlvidx in range(numTLVs):
+                        for tlvidx in np.arange(numTLVs):
                             tlvtype = to_int(buffer[index: index + 4])
                             index += 4
                             tlvlength = to_int(buffer[index: index + 4])
                             index += 4
-                            if tlvtype == TLV_type["MMWDEMO_OUTPUT_MSG_RANGE_PROFILE"]:
+                            if tlvtype == TLV_type["MMWDEMO_OUTPUT_MSG_DETECTED_POINTS"]:
                                 detectedPoints_byteVecIdx = index
 
                             index += tlvlength
@@ -90,19 +93,25 @@ try:
                             y_coord = []
                             z_coord = []
                             doppler = []
-                            for i in range(numDetectedObj):
+                            for i in np.arange(numDetectedObj):
                                 startIdx = detectedPoints_byteVecIdx + i * 16
                                 x_coord.append(to_float(buffer[startIdx:startIdx + 4]))
                                 y_coord.append(to_float(buffer[startIdx + 4:startIdx + 8]))
                                 z_coord.append(to_float(buffer[startIdx + 8:startIdx + 12]))
                                 doppler.append(to_float(buffer[startIdx + 12:startIdx + 16]))
 
+                            range = np.sqrt(np.square(x_coord) + np.square(y_coord) + np.square(z_coord))
+                            rangeId = [np.round(r / config["dataPath"][subFrameNo]["rangeIdxToMeters"]) for r in range]
+                            dopplerId = [np.round(d / config["dataPath"][subFrameNo]["dopplerResolutionMps"]) for d in
+                                         doppler]
+                            print(x_coord)
+                            print(y_coord)
+                            print(z_coord)
+
                 buffer = b"" + res
                 index = 8
                 continue
             buffer += res
-
-
 
 
 except serial.serialutil.SerialException:
