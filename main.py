@@ -1,8 +1,9 @@
 import serial
 import utils
 from threading import Thread
+from multiprocessing import Queue
 import numpy as np
-import re
+from plot_point_cloud import Plotter
 
 from config import parse_config
 
@@ -51,68 +52,76 @@ try:
         # Sending configuration
         utils.send_config(control_serial, utils.load_config("configs/profile_3d.cfg"))
         config = parse_config("configs/profile_3d.cfg")
+        queue = Queue()
+        Plotter(queue, config).start()
         # Listening to the data port
         buffer = b""
         index = 8
         while True:
-            res = data_serial.read(32)
-            if res[:len(magic_word)] == magic_word:
-                if len(buffer) > 0:
-                    version = buffer[index: index + 4]
-                    index += 4
-                    totalPacketLen = to_int(buffer[index: index + 4])
-                    index += 4
-                    tlv_platform = to_int(buffer[index: index + 4])
-                    index += 4
-                    frameNumber = to_int(buffer[index: index + 4])
-                    index += 4
-                    timeCpuCycles = to_int(buffer[index: index + 4])
-                    index += 4
-                    numDetectedObj = to_int(buffer[index: index + 4])
-                    index += 4
-                    numTLVs = to_int(buffer[index: index + 4])
-                    index += 4
-                    subFrameNo = to_int(buffer[index: index + 4])
-                    index += 4
+            try:
+                res = data_serial.read(32)
+                if res[:len(magic_word)] == magic_word:
+                    if len(buffer) > 0:
+                        version = buffer[index: index + 4]
+                        index += 4
+                        totalPacketLen = to_int(buffer[index: index + 4])
+                        index += 4
+                        tlv_platform = to_int(buffer[index: index + 4])
+                        index += 4
+                        frameNumber = to_int(buffer[index: index + 4])
+                        index += 4
+                        timeCpuCycles = to_int(buffer[index: index + 4])
+                        index += 4
+                        numDetectedObj = to_int(buffer[index: index + 4])
+                        index += 4
+                        numTLVs = to_int(buffer[index: index + 4])
+                        index += 4
+                        subFrameNo = to_int(buffer[index: index + 4])
+                        index += 4
 
-                    if totalPacketLen == len(buffer):
-                        print(frameNumber, subFrameNo, numTLVs, numDetectedObj)
-                        detectedPoints_byteVecIdx = -1
-                        for tlvidx in np.arange(numTLVs):
-                            tlvtype = to_int(buffer[index: index + 4])
-                            index += 4
-                            tlvlength = to_int(buffer[index: index + 4])
-                            index += 4
-                            if tlvtype == TLV_type["MMWDEMO_OUTPUT_MSG_DETECTED_POINTS"]:
-                                detectedPoints_byteVecIdx = index
+                        if totalPacketLen == len(buffer):
+                            # print(frameNumber, subFrameNo, numTLVs, numDetectedObj)
+                            detectedPoints_byteVecIdx = -1
+                            for tlvidx in np.arange(numTLVs):
+                                tlvtype = to_int(buffer[index: index + 4])
+                                index += 4
+                                tlvlength = to_int(buffer[index: index + 4])
+                                index += 4
+                                if tlvtype == TLV_type["MMWDEMO_OUTPUT_MSG_DETECTED_POINTS"]:
+                                    detectedPoints_byteVecIdx = index
 
-                            index += tlvlength
+                                index += tlvlength
 
-                        if detectedPoints_byteVecIdx != -1:
-                            x_coord = []
-                            y_coord = []
-                            z_coord = []
-                            doppler = []
-                            for i in np.arange(numDetectedObj):
-                                startIdx = detectedPoints_byteVecIdx + i * 16
-                                x_coord.append(to_float(buffer[startIdx:startIdx + 4]))
-                                y_coord.append(to_float(buffer[startIdx + 4:startIdx + 8]))
-                                z_coord.append(to_float(buffer[startIdx + 8:startIdx + 12]))
-                                doppler.append(to_float(buffer[startIdx + 12:startIdx + 16]))
+                            if detectedPoints_byteVecIdx != -1:
+                                x_coord = []
+                                y_coord = []
+                                z_coord = []
+                                doppler = []
+                                for i in np.arange(numDetectedObj):
+                                    startIdx = detectedPoints_byteVecIdx + i * 16
+                                    x_coord.append(to_float(buffer[startIdx:startIdx + 4]))
+                                    y_coord.append(to_float(buffer[startIdx + 4:startIdx + 8]))
+                                    z_coord.append(to_float(buffer[startIdx + 8:startIdx + 12]))
+                                    doppler.append(to_float(buffer[startIdx + 12:startIdx + 16]))
 
-                            range = np.sqrt(np.square(x_coord) + np.square(y_coord) + np.square(z_coord))
-                            rangeId = [np.round(r / config["dataPath"][subFrameNo]["rangeIdxToMeters"]) for r in range]
-                            dopplerId = [np.round(d / config["dataPath"][subFrameNo]["dopplerResolutionMps"]) for d in
-                                         doppler]
-                            print(x_coord)
-                            print(y_coord)
-                            print(z_coord)
+                                range = np.sqrt(np.square(x_coord) + np.square(y_coord) + np.square(z_coord))
+                                rangeId = [np.round(r / config["dataPath"][subFrameNo]["rangeIdxToMeters"]) for r in
+                                           range]
+                                dopplerId = [np.round(d / config["dataPath"][subFrameNo]["dopplerResolutionMps"]) for d
+                                             in
+                                             doppler]
+                                print("Sending frame no: ", frameNumber)
+                                queue.put({"frame_no": frameNumber, "x": x_coord, "y": y_coord, "z": z_coord})
 
-                buffer = b"" + res
-                index = 8
-                continue
-            buffer += res
-
-
+                    buffer = b"" + res
+                    index = 8
+                    continue
+                buffer += res
+            except KeyboardInterrupt:
+                if control_serial.isOpen():
+                    control_serial.close()
+                if data_serial.isOpen():
+                    data_serial.close()
+                break
 except serial.serialutil.SerialException:
     print("Cannot connect to the ports")

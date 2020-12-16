@@ -22,10 +22,13 @@ def send_config(port: Serial, lines: list):
 def cli_listener(port: Serial):
     while True:
         try:
-            line = port.readline().decode("latin-1")
-            if len(line) > 0:
-                print(line.rstrip())
-                sleep(0.01)
+            if port is not None and port.isOpen():
+                line = port.readline().decode("latin-1")
+                if len(line) > 0:
+                    print(line.rstrip())
+            else:
+                break
+            sleep(0.01)
         except KeyboardInterrupt:
-            port.close()
+            # port.close()
             break
