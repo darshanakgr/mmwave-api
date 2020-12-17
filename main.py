@@ -3,7 +3,9 @@ import utils
 from threading import Thread
 from multiprocessing import Queue
 import numpy as np
-from plot_point_cloud import Plotter
+from radar_depthmap import RadarPlotter
+import time
+import json
 
 from config import parse_config
 
@@ -34,15 +36,6 @@ def to_float(byte_vector):
     return np.frombuffer(byte_vector, dtype=np.uint8).view('<f4')[0]
 
 
-# def intify(value, base=16, size=2):
-#     if type(value) not in (list, tuple, bytes,):
-#         value = (value,)
-#     if (type(value) in (bytes,) and base == 16) or (type(value) in (list, tuple,)):
-#         return sum([item * ((base ** size) ** i) for i, item in enumerate(value)])
-#     else:
-#         return sum([((item // 16) * base + (item % 16)) * ((base ** size) ** i) for i, item in enumerate(value)])
-
-
 try:
     control_serial = serial.Serial(control_port, 115200, timeout=0.01)
     data_serial = serial.Serial(data_port, 921600, timeout=0.01)
@@ -53,7 +46,7 @@ try:
         utils.send_config(control_serial, utils.load_config("configs/profile_3d.cfg"))
         config = parse_config("configs/profile_3d.cfg")
         queue = Queue()
-        Plotter(queue, config).start()
+        RadarPlotter(queue, config).start()
         # Listening to the data port
         buffer = b""
         index = 8
