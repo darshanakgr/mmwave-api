@@ -19,7 +19,7 @@ from mmwave import MMWave
 
 
 class Ui_Dialog(object):
-    def __init__(self):
+    def __init__(self, Dialo):
         self.__queue = Queue()
         self.__mmwave = MMWave(self.__queue)
         range_max = self.__mmwave.get_config()["dataPath"][0]["rangeMeters"]
@@ -29,7 +29,6 @@ class Ui_Dialog(object):
         self.__range_z = (-range_max / 2, range_max / 2)
         self.__capture = False
 
-    def setupUi(self, Dialog):
         Dialog.setObjectName("Dialog")
         Dialog.resize(1000, 810)
         self.connectBtn = QtWidgets.QPushButton(Dialog)
@@ -139,7 +138,6 @@ if __name__ == "__main__":
 
     app = QtWidgets.QApplication(sys.argv)
     Dialog = QtWidgets.QDialog()
-    ui = Ui_Dialog()
-    ui.setupUi(Dialog)
+    ui = Ui_Dialog(Dialog)
     Dialog.show()
     sys.exit(app.exec_())
