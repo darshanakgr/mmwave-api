@@ -14,8 +14,8 @@ class MMWave(Thread):
     def __init__(self, queue):
         Thread.__init__(self)
         self.__ports = {
-            "data": "COM7",
-            "control": "COM8"
+            "data": "COM3",
+            "control": "COM4"
         }
         self.__data_port = None
         self.__control_port = None

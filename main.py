@@ -9,8 +9,8 @@ import json
 
 from config import parse_config
 
-control_port = "COM8"
-data_port = "COM7"
+control_port = "COM4"
+data_port = "COM3"
 
 magic_word = b'\x02\x01\x04\x03\x06\x05\x08\x07'
 
